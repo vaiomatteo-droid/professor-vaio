@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plank Evaluator v2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  
+  <!-- Versioni fissate delle librerie MediaPipe per garantire stabilità -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js" crossorigin="anonymous"></script>
+
+  <style>
+    :root {
+      --green: #00ff87;
+      --red: #ff1744;
+      --cyan: #00e5ff;
+      --amber: #ffab00;
+      --bg: #08080d;
+      --panel: rgba(8,8,18,0.85);
+      --border: rgba(0,229,255,0.18);
+      --mono: 'JetBrains Mono', monospace;
+      --display: 'Rajdhani', sans-serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--bg);
+      color: #e8eaf0;
+      font-family: var(--mono);
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      z-index: 20;
+      flex-shrink: 0;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .logo {
+      font-family: var(--display);
+      font-size: 1.25rem;
+      letter-spacing: 2px;
+      color: var(--cyan);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .logo-icon {
+      width: 26px; height: 26px;
+      border: 2px solid var(--cyan);
+      border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.7rem;
+    }
+
+    .tol-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.7rem;
+      color: #7888a0;
+    }
+    .tol-val {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--cyan);
+      min-width: 30px;
+      text-align: right;
+    }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 90px; height: 4px;
+      background: #1a2030;
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--cyan);
+      cursor: pointer;
+      box-shadow: 0 0 6px var(--cyan);
+    }
+
+    /* ── Main video area ── */
+    #main {
+      position: relative;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    video { display: none; }
+
+    canvas#output {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+
+    /* ── HUD overlay ── */
+    #hud {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 5;
+    }
+
+    .corner {
+      position: absolute;
+      width: 24px; height: 24px;
+      border-color: var(--cyan);
+      border-style: solid;
+      opacity: 0.45;
+    }
+    .corner.tl { top: 12px; left: 12px; border-width: 2px 0 0 2px; }
+    .corner.tr { top: 12px; right: 12px; border-width: 2px 2px 0 0; }
+    .corner.bl { bottom: 12px; left: 12px; border-width: 0 0 2px 2px; }
+    .corner.br { bottom: 12px; right: 12px; border-width: 0 2px 2px 0; }
+
+    /* ── Status panel top-center ── */
+    #status-panel {
+      position: absolute;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--panel);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      transition: border-color 0.25s;
+      white-space: nowrap;
+    }
+    .status-dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: #445566;
+      transition: background 0.25s, box-shadow 0.25s;
+      flex-shrink: 0;
+    }
+    #status-text {
+      font-family: var(--display);
+      font-size: 1rem;
+      letter-spacing: 1.5px;
+      color: #a0b0c0;
+      transition: color 0.25s;
+    }
+    #status-panel.good { border-color: rgba(0,255,135,0.4); }
+    #status-panel.good .status-dot { background: var(--green); box-shadow: 0 0 10px var(--green); }
+    #status-panel.good #status-text { color: var(--green); }
+    #status-panel.bad { border-color: rgba(255,23,68,0.4); }
+    #status-panel.bad .status-dot { background: var(--red); box-shadow: 0 0 10px var(--red); }
+    #status-panel.bad #status-text { color: var(--red); }
+
+    /* ── Timer display top-right ── */
+    #timer-display {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      background: var(--panel);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 14px;
+      text-align: center;
+      min-width: 100px;
+      transition: border-color 0.3s;
+    }
+    #timer-label {
+      font-size: 0.6rem;
+      color: #445566;
+      letter-spacing: 1.5px;
+      margin-bottom: 3px;
+    }
+    #timer-clock {
+      font-family: var(--display);
+      font-size: 2.4rem;
+      letter-spacing: 3px;
+      color: #c0d0e0;
+      line-height: 1;
+      transition: color 0.3s;
+    }
+    #timer-target-bar {
+      margin-top: 5px;
+      height: 3px;
+      background: #1a2030;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    #timer-progress {
+      height: 100%;
+      width: 0%;
+      background: var(--cyan);
+      border-radius: 2px;
+      transition: width 0.9s linear, background 0.3s;
+    }
+
+    #timer-display.running { border-color: rgba(0,229,255,0.45); }
+    #timer-display.running #timer-clock { color: var(--cyan); }
+    #timer-display.done { border-color: rgba(0,255,135,0.5); }
+    #timer-display.done #timer-clock { color: var(--green); }
+    #timer-display.done #timer-progress { background: var(--green); }
+
+    @keyframes flash {
+      0%,100% { opacity: 1; }
+      50%      { opacity: 0.25; }
+    }
+    .flash-anim { animation: flash 0.5s ease-in-out 5; }
+
+    /* ── Angle chips bottom-left ── */
+    #angle-panel {
+      position: absolute;
+      bottom: 14px;
+      left: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .a-chip {
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 12px;
+      font-size: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: border-color 0.25s;
+    }
+    .a-chip-label { color: #5a6a80; letter-spacing: 0.5px; min-width: 72px; }
+    .a-chip-val {
+      font-weight: 600;
+      font-size: 0.88rem;
+      color: #a0b0c0;
+      transition: color 0.25s;
+      min-width: 40px;
+      text-align: right;
+    }
+    .a-chip.warn { border-color: rgba(255,23,68,0.4); }
+    .a-chip.warn .a-chip-val { color: var(--red); }
+    .a-chip.ok { border-color: rgba(0,255,135,0.25); }
+    .a-chip.ok .a-chip-val { color: var(--green); }
+
+    /* ── Side tag bottom-right ── */
+    #side-tag {
+      position: absolute;
+      bottom: 14px;
+      right: 14px;
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 12px;
+      font-size: 0.7rem;
+      color: #5a6a80;
+      letter-spacing: 0.5px;
+    }
+
+    /* ── Timer controls bar ── */
+    #timer-bar {
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      flex-shrink: 0;
+      z-index: 20;
+      flex-wrap: wrap;
+    }
+
+    .t-btn {
+      font-family: var(--display);
+      font-size: 1rem;
+      letter-spacing: 1.5px;
+      border: 1.5px solid;
+      border-radius: 8px;
+      padding: 9px 22px;
+      cursor: pointer;
+      background: transparent;
+      transition: background 0.2s, box-shadow 0.2s;
+      outline: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+
+    #btn-start {
+      border-color: var(--cyan);
+      color: var(--cyan);
+      min-width: 130px;
+    }
+    #btn-start:active { background: rgba(0,229,255,0.15); }
+    #btn-start.running { border-color: var(--amber); color: var(--amber); }
+
+    #btn-reset {
+      border-color: #2a3545;
+      color: #5a6a80;
+    }
+    #btn-reset:active { background: rgba(255,255,255,0.06); }
+
+    .target-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.72rem;
+      color: #5a6a80;
+    }
+
+    select {
+      background: #0e111a;
+      border: 1.5px solid #2a3545;
+      border-radius: 6px;
+      color: #a0b0c0;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      padding: 7px 10px;
+      outline: none;
+      cursor: pointer;
+      -webkit-appearance: none;
+    }
+
+    /* ── Loading ── */
+    #loading {
+      position: absolute;
+      inset: 0;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      z-index: 30;
+    }
+    .loader-ring {
+      width: 50px; height: 50px;
+      border: 3px solid #1a2030;
+      border-top-color: var(--cyan);
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loader-text { font-size: 0.78rem; color: #445566; letter-spacing: 1px; }
+    #loading.hidden { display: none; }
+
+    #main::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.04) 2px,rgba(0,0,0,0.04) 4px);
+      pointer-events: none;
+      z-index: 4;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">PE</div>
+    PLANK EVALUATOR v2
+  </div>
+  <div class="tol-control">
+    <span>TOLLERANZA</span>
+    <input type="range" id="tol-range" min="3" max="20" value="10">
+    <span class="tol-val" id="tol-display">10°</span>
+  </div>
+  <span style="font-size:0.68rem;color:#334455;">📐 Analisi <strong style="color:#556677">Biomeccanica</strong></span>
+</header>
+
+<div id="main">
+  <video id="video" playsinline></video>
+  <canvas id="output"></canvas>
+
+  <div id="hud">
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+
+    <div id="status-panel">
+      <div class="status-dot"></div>
+      <span id="status-text">INIZIALIZZAZIONE…</span>
+    </div>
+
+    <div id="timer-display">
+      <div id="timer-label">TEMPO</div>
+      <div id="timer-clock">00:00</div>
+      <div id="timer-target-bar"><div id="timer-progress"></div></div>
+    </div>
+
+    <div id="angle-panel">
+      <div class="a-chip" id="chip-hip">
+        <span class="a-chip-label">ANCA</span>
+        <span class="a-chip-val" id="val-hip">—</span>
+      </div>
+      <div class="a-chip" id="chip-knee">
+        <span class="a-chip-label">GINOCCHIO</span>
+        <span class="a-chip-val" id="val-knee">—</span>
+      </div>
+    </div>
+
+    <div id="side-tag" style="display:none;">
+      LATO: <span id="side-name">—</span>
+    </div>
+  </div>
+
+  <div id="loading">
+    <div class="loader-ring"></div>
+    <div class="loader-text">CARICAMENTO MODELLO POSE…</div>
+  </div>
+</div>
+
+<!-- ── Timer bar ── -->
+<div id="timer-bar">
+  <button class="t-btn" id="btn-start">▶  START</button>
+  <button class="t-btn" id="btn-reset">↺  RESET</button>
+  <div class="target-control">
+    <span>OBIETTIVO</span>
+    <select id="target-select">
+      <option value="0">LIBERO</option>
+      <option value="20">20 sec</option>
+      <option value="30">30 sec</option>
+      <option value="45">45 sec</option>
+      <option value="60">1 min</option>
+      <option value="90">1 min 30</option>
+      <option value="120">2 min</option>
+      <option value="180">3 min</option>
+    </select>
+  </div>
+</div>
+
+<script>
+  /* ── refs ── */
+  const videoEl     = document.getElementById('video');
+  const canvas      = document.getElementById('output');
+  const ctx         = canvas.getContext('2d');
+  const loadingEl   = document.getElementById('loading');
+  const statusPanel = document.getElementById('status-panel');
+  const statusText  = document.getElementById('status-text');
+  const chipHip     = document.getElementById('chip-hip');
+  const chipKnee    = document.getElementById('chip-knee');
+  const valHip      = document.getElementById('val-hip');
+  const valKnee     = document.getElementById('val-knee');
+  const sideTag     = document.getElementById('side-tag');
+  const sideName    = document.getElementById('side-name');
+  const tolRange    = document.getElementById('tol-range');
+  const tolDisplay  = document.getElementById('tol-display');
+
+  const timerDisp   = document.getElementById('timer-display');
+  const timerClock  = document.getElementById('timer-clock');
+  const timerLabel  = document.getElementById('timer-label');
+  const timerProg   = document.getElementById('timer-progress');
+  const btnStart    = document.getElementById('btn-start');
+  const btnReset    = document.getElementById('btn-reset');
+  const targetSel   = document.getElementById('target-select');
+
+  /* ── Tolerance ── */
+  let tolerance = 10;
+  tolRange.addEventListener('input', () => {
+    tolerance = +tolRange.value;
+    tolDisplay.textContent = tolerance + '°';
+  });
+
+  /* ── Timer ── */
+  let timerIv      = null;
+  let timerSec     = 0;
+  let running      = false;
+  let targetSec    = 0;
+
+  function fmt(s) {
+    return String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
+  }
+
+  function refreshUI() {
+    timerClock.textContent = fmt(timerSec);
+    if (targetSec > 0) {
+      timerProg.style.width = Math.min(100, timerSec/targetSec*100) + '%';
+      timerLabel.textContent = fmt(timerSec) + ' / ' + fmt(targetSec);
+    } else {
+      timerProg.style.width = '0%';
+      timerLabel.textContent = 'TEMPO';
+    }
+  }
+
+  function startT() {
+    if (running) return;
+    running = true;
+    timerDisp.classList.add('running');
+    timerDisp.classList.remove('done');
+    btnStart.textContent = '⏸  PAUSA';
+    btnStart.classList.add('running');
+    timerIv = setInterval(() => {
+      timerSec++;
+      refreshUI();
+      if (targetSec > 0 && timerSec >= targetSec) {
+        stopT();
+        timerDisp.classList.add('done','flash-anim');
+        timerLabel.textContent = '✓  OBIETTIVO!';
+        timerDisp.addEventListener('animationend', () => timerDisp.classList.remove('flash-anim'), {once:true});
+      }
+    }, 1000);
+  }
+
+  function stopT() {
+    clearInterval(timerIv);
+    running = false;
+    timerDisp.classList.remove('running');
+    btnStart.textContent = '▶  START';
+    btnStart.classList.remove('running');
+  }
+
+  function resetT() {
+    stopT();
+    timerSec  = 0;
+    targetSec = +targetSel.value;
+    timerDisp.classList.remove('done');
+    refreshUI();
+  }
+
+  btnStart.addEventListener('click', () => running ? stopT() : startT());
+  btnReset.addEventListener('click', resetT);
+  targetSel.addEventListener('change', resetT);
+
+  /* ── Pose math ── */
+  const IDX = { sL:11, sR:12, hL:23, hR:24, kL:25, kR:26, aL:27, aR:28 };
+
+  function devAt(A, B, C) {
+    const ax=A.x-B.x, ay=A.y-B.y, cx=C.x-B.x, cy=C.y-B.y;
+    const mag = Math.sqrt(ax*ax+ay*ay)*Math.sqrt(cx*cx+cy*cy);
+    if (mag<1e-6) return 0;
+    return Math.abs(180 - Math.acos(Math.max(-1,Math.min(1,(ax*cx+ay*cy)/mag)))*180/Math.PI);
+  }
+
+  function px(lm,W,H){ return {x:lm.x*W, y:lm.y*H}; }
+
+  function dot(x,y,col,r=9){
+    const g=ctx.createRadialGradient(x,y,0,x,y,r*2.5);
+    g.addColorStop(0,col+'bb'); g.addColorStop(1,'transparent');
+    ctx.beginPath(); ctx.arc(x,y,r*2.5,0,Math.PI*2); ctx.fillStyle=g; ctx.fill();
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fillStyle=col; ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.75)'; ctx.lineWidth=1.5; ctx.stroke();
+  }
+
+  function seg(x1,y1,x2,y2,col){
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
+    ctx.strokeStyle=col+'44'; ctx.lineWidth=14; ctx.lineCap='round'; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
+    ctx.strokeStyle=col; ctx.lineWidth=4; ctx.stroke();
+  }
+
+  function lbl(text,x,y,col){
+    ctx.font='600 11px JetBrains Mono,monospace'; ctx.textAlign='center';
+    ctx.fillStyle='rgba(8,8,18,0.72)'; ctx.fillRect(x-36,y-23,72,17);
+    ctx.fillStyle=col; ctx.fillText(text,x,y-10);
+  }
+
+  /* ── Results ── */
+  function onResults(res) {
+    loadingEl.classList.add('hidden');
+    const W=canvas.width, H=canvas.height;
+    
+    // Pulizia del buffer prima del disegno del nuovo frame
+    ctx.clearRect(0,0,W,H);
+    ctx.drawImage(res.image,0,0,W,H);
+
+    const lm=res.poseLandmarks;
+    if (!lm) {
+      statusPanel.className='';
+      statusText.textContent='NESSUNA PERSONA RILEVATA';
+      valHip.textContent=valKnee.textContent='—';
+      chipHip.className=chipKnee.className='a-chip';
+      sideTag.style.display='none';
+      return;
+    }
+
+    const keys={
+      L:[IDX.sL,IDX.hL,IDX.kL,IDX.aL],
+      R:[IDX.sR,IDX.hR,IDX.kR,IDX.aR]
+    };
+    const visScore = s => keys[s].reduce((a,i)=>a+(lm[i].visibility||0),0)/4;
+    const side = visScore('L')>=visScore('R') ? 'L' : 'R';
+    const [si,hi,ki,ai] = keys[side];
+
+    sideName.textContent = side==='L' ? 'SINISTRO' : 'DESTRO';
+    sideTag.style.display='block';
+
+    if (Math.min(...keys[side].map(i=>lm[i].visibility||0)) < 0.45) {
+      statusPanel.className='';
+      statusText.textContent='VISIBILITÀ INSUFFICIENTE';
+      valHip.textContent=valKnee.textContent='—';
+      chipHip.className=chipKnee.className='a-chip';
+      return;
+    }
+
+    const S=px(lm[si],W,H), H2=px(lm[hi],W,H), K=px(lm[ki],W,H), A=px(lm[ai],W,H);
+    const dH=devAt(S,H2,K), dK=devAt(H2,K,A);
+    const maxD=Math.max(dH,dK), ok=maxD<=tolerance;
+    const col=ok?'#00ff87':'#ff1744';
+
+    seg(S.x,S.y,H2.x,H2.y,col);
+    seg(H2.x,H2.y,K.x,K.y,col);
+    seg(K.x,K.y,A.x,A.y,col);
+    [S,H2,K,A].forEach((p,i)=>{
+      dot(p.x,p.y,col);
+      lbl(['SPALLA','ANCA','GINOCCHIO','CAVIGLIA'][i],p.x,p.y,col);
+    });
+
+    statusPanel.className = ok?'good':'bad';
+    statusText.textContent = ok
+      ? `ALLINEATO  •  MAX ${maxD.toFixed(1)}°`
+      : `CORREGGERE ${dH>dK?'ANCA':'GINOCCHIO'}  •  ${maxD.toFixed(1)}°`;
+
+    chipHip.className  = 'a-chip '+(dH>tolerance?'warn':'ok');
+    valHip.textContent  = dH.toFixed(1)+'°';
+    chipKnee.className = 'a-chip '+(dK>tolerance?'warn':'ok');
+    valKnee.textContent = dK.toFixed(1)+'°';
+  }
+
+  /* ── MediaPipe init ── */
+  const pose = new Pose({ locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+  pose.setOptions({ modelComplexity:1, smoothLandmarks:true, enableSegmentation:false,
+    minDetectionConfidence:0.55, minTrackingConfidence:0.55 });
+  pose.onResults(onResults);
+
+  const camera = new Camera(videoEl, {
+    onFrame: async () => {
+      // CORREZIONE: Aggiorniamo le dimensioni del canvas solo se necessario
+      // Questo impedisce al browser di cancellare il buffer a ogni frame.
+      if (videoEl.videoWidth > 0 && (canvas.width !== videoEl.videoWidth || canvas.height !== videoEl.videoHeight)) {
+          canvas.width  = videoEl.videoWidth;
+          canvas.height = videoEl.videoHeight;
+      }
+      await pose.send({ image: videoEl });
+    },
+    width: 1280, height: 720, facingMode: 'environment'
+  });
+
+  camera.start().catch(err => {
+    loadingEl.innerHTML = `
+      <div style="text-align:center;color:#ff1744;font-size:0.82rem;max-width:300px;line-height:1.8">
+        ❌ ERRORE FOTOCAMERA<br>
+        <span style="color:#445566;font-size:0.75rem">${err.message}</span><br><br>
+        <span style="color:#445566">Assicurati di aver concesso i permessi e di aprire il sito in HTTPS o tramite localhost.</span>
+      </div>`;
+  });
+</script>
+</body>
+</html>
